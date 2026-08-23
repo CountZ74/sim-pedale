@@ -1,0 +1,298 @@
+<!DOCTYPE html><html lang="de"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pico Pedale</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#eee;padding:14px;max-width:460px;margin:0 auto}
+h1{color:#e94560;font-size:1.2rem}
+.tabs{display:flex;gap:6px;margin:12px 0}
+.tab{flex:1;padding:7px;text-align:center;border-radius:7px;cursor:pointer;background:#16213e;border:1px solid #0f3460;color:#aaa;font-size:.85rem}
+.tab.on{background:#e94560;border-color:#e94560;color:#fff}
+.panel{display:none}.panel.on{display:block}
+.a{background:#16213e;border:1px solid #0f3460;border-radius:9px;padding:12px;margin-bottom:10px}
+.a.dim{opacity:.35;pointer-events:none}
+.hd{display:flex;justify-content:space-between;align-items:baseline}
+.hd b{font-size:.95rem}.hd span{font-size:.78rem;color:#8ab}
+.bb{background:#0f3460;border-radius:5px;height:18px;overflow:hidden;margin:6px 0}
+.b{background:linear-gradient(90deg,#e94560,#f5a623);height:100%;border-radius:5px;transition:width .12s}
+.meta{font-size:.72rem;color:#889;font-variant-numeric:tabular-nums}
+.br{display:flex;gap:6px;margin-top:8px}
+.btn{flex:1;background:#e94560;color:#fff;border:none;border-radius:6px;padding:6px 2px;text-align:center;font-size:.72rem;cursor:pointer;font-family:inherit}
+.btn.s{background:#0f3460}.btn.r{background:#5a2020}
+.btn:disabled{opacity:.4;cursor:default}
+.sw{background:#2a1f00;border:1px solid #f5a623;color:#f5a623;border-radius:7px;padding:12px;margin-bottom:10px;font-size:.88rem;line-height:1.55}
+.so{background:#002a0f;border:1px solid #4caf50;color:#4caf50;border-radius:7px;padding:10px;margin-bottom:10px;font-size:.88rem}
+.se{background:#2a0f0f;border:1px solid #e94560;color:#ff8a9c;border-radius:7px;padding:10px;margin-bottom:10px;font-size:.82rem}
+.sv{font-size:1.5rem;font-weight:600;font-variant-numeric:tabular-nums;display:block;margin:6px 0 2px}
+.wlan{background:#0f3460;display:block;width:100%;text-align:center;color:#fff;border:none;border-radius:6px;padding:9px;margin-top:8px;font-size:.88rem;cursor:pointer;font-family:inherit}
+.kt{display:flex;gap:5px;margin-bottom:10px}
+.ktab{flex:1;padding:6px;text-align:center;border-radius:6px;cursor:pointer;background:#16213e;border:1px solid #0f3460;color:#aaa;font-size:.82rem}
+.ktab.on{background:#e94560;border-color:#e94560;color:#fff}
+.cw{background:#16213e;border:1px solid #0f3460;border-radius:9px;padding:10px}
+canvas{display:block;width:100%;touch-action:none;cursor:crosshair;border-radius:5px;background:#0d1b2e}
+.pr{display:flex;gap:5px;margin-top:8px}
+.p{flex:1;background:#0f3460;border:none;border-radius:5px;padding:6px;color:#eee;font-size:.75rem;cursor:pointer;font-family:inherit}
+.sb{width:100%;margin-top:8px;background:#4caf50;color:#fff;border:none;border-radius:6px;padding:9px;font-size:.88rem;cursor:pointer;font-family:inherit}
+.cb{margin-top:10px}
+.cl{font-size:.75rem;color:#aaa;margin-bottom:3px}
+.cbb{background:#0f3460;border-radius:4px;height:14px;overflow:hidden;margin-bottom:5px;position:relative}
+.cbi{background:#7eb8f7;height:100%;border-radius:4px;transition:width .12s;position:absolute;top:0;left:0;opacity:.55}
+.cbo{background:linear-gradient(90deg,#e94560,#f5a623);height:100%;border-radius:4px;transition:width .12s}
+.off{opacity:.5}
+</style></head><body>
+<h1>Pico Pedale <span style="font-size:.7rem;color:#556">v9</span></h1>
+<div class="tabs">
+  <div class="tab on" id="tk" onclick="tab('k')">Kalibrierung</div>
+  <div class="tab" id="tc" onclick="tab('c')">Kurven</div>
+</div>
+
+<div id="pk" class="panel on">
+  <div id="fsw"></div>
+  <div id="status"></div>
+  <div id="axes"></div>
+  <button class="wlan" onclick="wlanAus()">WLAN aus &ndash; HID-Modus</button>
+</div>
+
+<div id="pc" class="panel">
+  <div class="kt" id="kt"></div>
+  <div class="cw">
+    <canvas id="cv" width="420" height="280"></canvas>
+    <div class="cb">
+      <div class="cl">Eingang (nach Kalibrierung): <span id="ci">0</span>%</div>
+      <div class="cbb"><div class="cbi" id="bi"></div><div class="cbo" id="bo"></div></div>
+      <div class="cl">Ausgang (nach Kennlinie): <span id="co">0</span>%</div>
+    </div>
+    <div class="pr">
+      <button class="p" onclick="pre('lin')">Linear</button>
+      <button class="p" onclick="pre('prog')">Progressiv</button>
+      <button class="p" onclick="pre('deg')">Degressiv</button>
+      <button class="p" onclick="pre('s')">S-Kurve</button>
+    </div>
+    <button class="sb" id="sbtn" onclick="save()">Speichern</button>
+  </div>
+</div>
+
+<script>
+const $=i=>document.getElementById(i);
+const ADC=65536;
+let N=null,C=null,T=null,S=null,ai=0,di=-1,tabAkt='k',pending=false;
+
+function tab(id){
+  for(const p of ['k','c']){
+    $('p'+p).classList.toggle('on',p===id);
+    $('t'+p).classList.toggle('on',p===id);
+  }
+  tabAkt=id;
+  if(id==='c')draw();
+}
+
+async function api(u,o){
+  try{const r=await fetch(u,o);return await r.json();}catch(e){return null;}
+}
+
+async function init(){
+  const d=await api('/init');
+  if(!d){setTimeout(init,800);return;}
+  N=d.n;C=d.cv;T=d.t;
+  bauAchsen();bauKTabs();draw();
+  poll();
+}
+
+function bauAchsen(){
+  $('axes').innerHTML=N.map((n,i)=>
+    '<div class="a" id="a'+i+'">'+
+      '<div class="hd"><b>'+n+'</b><span id="pc'+i+'">0%</span></div>'+
+      '<div class="bb"><div class="b" id="b'+i+'"></div></div>'+
+      '<div class="meta" id="m'+i+'"></div>'+
+      '<div class="br">'+
+        '<button class="btn" onclick="kal('+i+')">Kalibrieren</button>'+
+        (T[i]==='hx711'
+          ? '<button class="btn s" onclick="go(\'/tare\')">Tarieren</button>'
+          : '<button class="btn s" onclick="go(\'/cal_flip?achse='+i+'\')">Umkehren</button>')+
+        '<button class="btn r" onclick="go(\'/cal_reset?achse='+i+'\')">Reset</button>'+
+      '</div>'+
+    '</div>').join('');
+}
+
+function bauKTabs(){
+  $('kt').innerHTML=N.map((n,i)=>'<div class="ktab'+(i?'':' on')+'" onclick="setAi('+i+')">'+n+'</div>').join('');
+}
+function setAi(i){
+  ai=i;
+  document.querySelectorAll('.ktab').forEach((t,j)=>t.classList.toggle('on',j===i));
+  draw();
+}
+
+function grad(v){return (v/ADC*360).toFixed(1)+'°';}
+
+function render(){
+  if(!S)return;
+  for(let i=0;i<3;i++){
+    $('b'+i).style.width=S.o[i]+'%';
+    $('pc'+i).textContent=S.o[i]+'%';
+    const st=S.c[i][0],sp=S.c[i][1];
+    $('m'+i).textContent = T[i]==='hx711'
+      ? 'Roh '+S.r[i]+'  ·  Maximalkraft '+sp+'  ·  '+(S.hz||0)+' Hz'
+      : 'Roh '+S.r[i]+' ('+grad(S.r[i])+')  ·  Null '+st+'  ·  Weg '+
+        (sp>0?'+':'')+sp+' ('+grad(Math.abs(sp))+')';
+    $('a'+i).classList.toggle('dim', S.ax!==null && S.ax!==i);
+  }
+  $('fsw').innerHTML = S.fs ? '' :
+    '<div class="se">Dateisystem schreibgeschützt – Kalibrierung gilt nur bis zum Neustart.</div>';
+  renderStatus();
+  if(tabAkt==='c'){
+    const inp=S.i[ai],out=S.o[ai];
+    $('bi').style.width=inp+'%';$('bo').style.width=out+'%';
+    $('ci').textContent=inp;$('co').textContent=out;
+    draw();
+  }
+}
+
+function renderStatus(){
+  const el=$('status');
+  if(S.ax===null){
+    el.innerHTML = (S.st==='done'&&S.m) ? '<div class="so">'+S.m+'</div>' : '';
+    return;
+  }
+  const n=N[S.ax], hx=T[S.ax]==='hx711';
+  if(S.st==='zero'){
+    el.innerHTML='<div class="sw"><b>Schritt 1/2 – '+n+'</b><br>'+
+      'Pedal vollständig loslassen und ruhig halten.'+
+      '<div class="br"><button class="btn" onclick="go(\'/cal_zero\')">Nullpunkt setzen</button>'+
+      '<button class="btn s" onclick="go(\'/cal_abort\')">Abbrechen</button></div></div>';
+  }else if(S.st==='sweep'){
+    const f=S.sw[0],r=S.sw[1],max=Math.max(f,r);
+    const txt = hx ? max+' Zähler'
+                   : Math.round(max)+' Schritte ('+grad(max)+')';
+    const ri  = hx ? '' : (f>=r?' aufwärts':' abwärts');
+    const hint = max<300
+      ? '<span style="font-size:.78rem;color:#c9a">noch keine Bewegung erkannt</span>'
+      : '<span style="font-size:.78rem;color:#c9a">wächst der Wert nicht weiter, nochmal durchtreten</span>';
+    el.innerHTML='<div class="sw"><b>Schritt 2/2 – '+n+'</b><br>'+
+      'Pedal jetzt zwei-, dreimal <b>voll durchtreten</b>. Der Wert unten muss dabei wachsen.'+
+      '<span class="sv">'+txt+ri+'</span>'+hint+
+      '<div class="br"><button class="btn" onclick="go(\'/cal_finish\')"'+(max<300?' disabled':'')+'>Fertig</button>'+
+      '<button class="btn s" onclick="go(\'/cal_abort\')">Abbrechen</button></div></div>';
+  }
+}
+
+function kal(i){go('/cal_start?achse='+i);}
+
+async function go(u){
+  if(pending)return;
+  pending=true;
+  const d=await api(u);
+  pending=false;
+  if(d){S=d;render();}
+}
+
+async function poll(){
+  if(!pending){
+    const d=await api('/data');
+    if(d){S=d;render();}
+  }
+  setTimeout(poll, (S&&S.st==='sweep')?200:500);
+}
+
+async function wlanAus(){
+  await api('/wlan_aus');
+  document.body.innerHTML='<h1>HID-Modus aktiv</h1><p style="color:#8ab;margin-top:10px">'+
+    'Der Access Point ist aus. Zum Wiedereinschalten den Taster am Pico drücken.</p>';
+}
+
+/* ---- Kennlinien-Editor ---- */
+const cv=$('cv'),ctx=cv.getContext('2d');
+const W=cv.width,H=cv.height,P=28,IW=W-2*P,IH=H-2*P;
+const px=x=>P+x/100*IW, py=y=>P+(1-y/100)*IH;
+const fx=x=>(x-P)/IW*100, fy=y=>(1-(y-P)/IH)*100;
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle='#1a3a5e';ctx.lineWidth=1;
+  [0,25,50,75,100].forEach(v=>{
+    ctx.beginPath();ctx.moveTo(px(v),P);ctx.lineTo(px(v),P+IH);
+    ctx.moveTo(P,py(v));ctx.lineTo(P+IW,py(v));ctx.stroke();
+  });
+  ctx.fillStyle='#556';ctx.font='9px system-ui';ctx.textAlign='center';
+  [0,25,50,75,100].forEach(v=>ctx.fillText(v+'%',px(v),H-3));
+  ctx.textAlign='right';
+  [25,50,75,100].forEach(v=>ctx.fillText(v+'%',P-3,py(v)+3));
+  ctx.beginPath();ctx.strokeStyle='#334';ctx.setLineDash([4,4]);
+  ctx.moveTo(px(0),py(0));ctx.lineTo(px(100),py(100));ctx.stroke();ctx.setLineDash([]);
+  if(!C)return;
+  const pts=C[ai];
+  if(pts&&pts.length>=2){
+    ctx.beginPath();ctx.strokeStyle='#e94560';ctx.lineWidth=2.5;
+    ctx.moveTo(px(pts[0][0]),py(pts[0][1]));
+    for(let i=1;i<pts.length;i++)ctx.lineTo(px(pts[i][0]),py(pts[i][1]));
+    ctx.stroke();
+    pts.forEach((p,i)=>{
+      ctx.beginPath();ctx.arc(px(p[0]),py(p[1]),i===di?8:6,0,Math.PI*2);
+      ctx.fillStyle=i===di?'#f5a623':'#e94560';ctx.fill();
+      ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.stroke();
+    });
+  }
+  if(S){
+    const inp=S.i[ai];
+    ctx.beginPath();ctx.strokeStyle='#7eb8f7';ctx.lineWidth=1.5;ctx.setLineDash([3,3]);
+    ctx.moveTo(px(inp),P);ctx.lineTo(px(inp),P+IH);ctx.stroke();ctx.setLineDash([]);
+  }
+}
+
+function gpos(e){
+  const r=cv.getBoundingClientRect(),t=e.touches?e.touches[0]:e;
+  return [(t.clientX-r.left)*W/r.width,(t.clientY-r.top)*H/r.height];
+}
+function near(mx,my){
+  let b=-1,bd=16;
+  C[ai].forEach((p,i)=>{const d=Math.hypot(px(p[0])-mx,py(p[1])-my);if(d<bd){bd=d;b=i;}});
+  return b;
+}
+function clamp(i,x,y){
+  const pts=C[ai];
+  x=Math.max(0,Math.min(100,x));y=Math.max(0,Math.min(100,y));
+  if(i>0)x=Math.max(pts[i-1][0]+1,x);
+  if(i<pts.length-1)x=Math.min(pts[i+1][0]-1,x);
+  if(i===0)x=0;
+  if(i===pts.length-1)x=100;
+  return [Math.round(x),Math.round(y)];
+}
+cv.addEventListener('mousedown',e=>{
+  const[mx,my]=gpos(e);di=near(mx,my);
+  if(di<0){
+    const x=fx(mx),y=fy(my);
+    if(x<0||x>100||y<0||y>100)return;
+    const pts=C[ai];let ins=pts.length;
+    for(let i=0;i<pts.length;i++)if(pts[i][0]>x){ins=i;break;}
+    pts.splice(ins,0,[Math.round(x),Math.round(y)]);di=ins;
+  }
+  draw();
+});
+cv.addEventListener('mousemove',e=>{if(di<0)return;const[mx,my]=gpos(e);C[ai][di]=clamp(di,fx(mx),fy(my));draw();});
+cv.addEventListener('mouseup',()=>{di=-1;draw();});
+cv.addEventListener('mouseleave',()=>{di=-1;});
+cv.addEventListener('touchstart',e=>{e.preventDefault();const[mx,my]=gpos(e);di=near(mx,my);},{passive:false});
+cv.addEventListener('touchmove',e=>{e.preventDefault();if(di<0)return;const[mx,my]=gpos(e);C[ai][di]=clamp(di,fx(mx),fy(my));draw();},{passive:false});
+cv.addEventListener('touchend',()=>{di=-1;});
+cv.addEventListener('dblclick',e=>{
+  const[mx,my]=gpos(e);const i=near(mx,my);
+  if(i>0&&i<C[ai].length-1){C[ai].splice(i,1);draw();}
+});
+
+function pre(t){
+  const p={lin:[[0,0],[25,25],[50,50],[75,75],[100,100]],
+           prog:[[0,0],[25,8],[50,25],[75,55],[100,100]],
+           deg:[[0,0],[25,45],[50,75],[75,92],[100,100]],
+           s:[[0,0],[25,10],[50,50],[75,90],[100,100]]};
+  C[ai]=p[t].map(a=>a.slice());draw();
+}
+
+async function save(){
+  const b=$('sbtn');b.textContent='...';
+  const d=await api('/kurve',{method:'POST',headers:{'Content-Type':'application/json'},
+                              body:JSON.stringify({achse:ai,curve:C[ai]})});
+  b.textContent=(d&&d.ok)?'Gespeichert':'Fehler';
+  setTimeout(()=>b.textContent='Speichern',1800);
+}
+
+init();
+</script></body></html>
