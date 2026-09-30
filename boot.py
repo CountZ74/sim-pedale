@@ -15,7 +15,7 @@ import usb_hid
 TASTER_PIN = "GP3"          # muss zu WIFI_BTN_PIN in settings.py passen
 
 # Joystick HID Descriptor (v9.6)
-# 3 Achsen (Rx, Ry, Rz) mit je 8 bit (-127 bis 127), 16 Buttons
+# 3 Pedal-Achsen (Accelerator, Brake, Clutch) mit je 8 bit (-127 bis 127), 16 Buttons
 #
 # Bewusst KEIN Gamepad und KEINE Achsen X/Y: Spiele wie Automobilista 2 und
 # Project CARS steuern ihr Menue ueber X/Y von Gamepads. Ein losgelassenes
@@ -34,13 +34,13 @@ GAMEPAD_DESCRIPTOR = bytes((
     0x75, 0x01,        #   Report Size (1)
     0x95, 0x10,        #   Report Count (16)
     0x81, 0x02,        #   Input (Data, Variable, Absolute)
-    # Achsen Rx, Ry, Rz (je 8 bit, -127 bis 127)
-    0x05, 0x01,        #   Usage Page (Generic Desktop)
+    # Pedale als Simulation Controls (je 8 bit, -127 bis 127)
+    0x05, 0x02,        #   Usage Page (Simulation Controls)
     0x15, 0x81,        #   Logical Minimum (-127)
     0x25, 0x7F,        #   Logical Maximum (127)
-    0x09, 0x33,        #   Usage (Rx)  Gas
-    0x09, 0x34,        #   Usage (Ry)  Bremse
-    0x09, 0x35,        #   Usage (Rz)  Kupplung
+    0x09, 0xC4,        #   Usage (Accelerator)  Gas
+    0x09, 0xC5,        #   Usage (Brake)        Bremse
+    0x09, 0xC6,        #   Usage (Clutch)       Kupplung
     0x75, 0x08,        #   Report Size (8)
     0x95, 0x03,        #   Report Count (3)
     0x81, 0x02,        #   Input (Data, Variable, Absolute)
