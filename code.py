@@ -1,6 +1,11 @@
 """
-Pico W Pedale Controller v9.8 - Wraparound-Kalibrierung + schneller Webserver
+Pico W Pedale Controller v9.9 - Wraparound-Kalibrierung + schneller Webserver
 =============================================================================
+v9.9: Der HID-Report hat keine Buttons mehr, nur noch die drei Achsen
+      (6 statt 8 Byte). Pedale haben keine Tasten, und ein Geraet ohne Buttons
+      wird von Spielen seltener als Menue-Controller behandelt. Aendert
+      boot.py UND code.py - der Report-Aufbau muss zum Descriptor passen.
+
 v9.8: Der Pico meldet sich als Joystick mit Rx/Ry/Rz statt als Gamepad mit
       X/Y/Z (Aenderung in boot.py, hier die Suche nach dem HID-Geraet). Grund:
       Automobilista 2 und Project CARS lassen Gamepads das Menue steuern, ein
@@ -427,23 +432,20 @@ for device in usb_hid.devices:
         gamepad_device = device
         break
 
-_report      = bytearray(8)
-_last_report = bytearray(8)
+_report      = bytearray(6)
+_last_report = bytearray(6)
 
-def gamepad_senden(x, y, z, buttons=0):
-    """Report zusammenbauen: 2 Byte Buttons, dann 3 Achsen zu je 16 bit.
+def gamepad_senden(x, y, z):
+    """Report zusammenbauen: 3 Achsen zu je 16 bit.
 
     Alles little endian, unsigned 0..65535 - passend zum Descriptor in boot.py.
     """
     if not gamepad_device:
         return
-    b = buttons & 0xFFFF
-    _report[0] = b & 0xFF
-    _report[1] = (b >> 8) & 0xFF
     for i, v in enumerate((x, y, z)):
         v = 0 if v < 0 else (AXIS_MAX if v > AXIS_MAX else int(v))
-        _report[2 + 2 * i] = v & 0xFF
-        _report[3 + 2 * i] = (v >> 8) & 0xFF
+        _report[2 * i] = v & 0xFF
+        _report[1 + 2 * i] = (v >> 8) & 0xFF
     if _report == _last_report:          # unveraenderte Reports sparen wir uns
         return
     _last_report[:] = _report
@@ -1431,7 +1433,7 @@ except OSError:
     print("Achtung: Dateisystem schreibgeschuetzt, Kalibrierung nur im RAM")
 
 led_blink(3, an=150, aus=150)
-print("Pico W Pedale v9.8 bereit - Bremse:", BREMSE_TYP, hx_modus,
+print("Pico W Pedale v9.9 bereit - Bremse:", BREMSE_TYP, hx_modus,
       "- HID:", "ja" if gamepad_device else "NEIN")
 time.sleep(1.0)
 

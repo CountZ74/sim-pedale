@@ -1,4 +1,4 @@
-# boot.py - Pico W Pedale v9.8
+# boot.py - Pico W Pedale v9.9
 #
 # Jeder Schritt ist einzeln abgesichert. Faellt einer aus, laufen die anderen
 # trotzdem - und der Grund steht hinterher in boot_out.txt auf CIRCUITPY.
@@ -46,7 +46,9 @@ except Exception as e:
 
 # --- HID-Joystick ------------------------------------------------------------
 #
-# 16 Buttons und 3 Achsen Rx, Ry, Rz mit je 16 bit, unsigned 0..65535.
+# 3 Achsen Rx, Ry, Rz mit je 16 bit, unsigned 0..65535. Keine Buttons - Pedale
+# haben keine, und ein Geraet ohne Buttons wird von Spielen seltener als
+# Menue-Controller behandelt (seit v9.9).
 #
 # Seit v9.8 als Joystick mit Rx/Ry/Rz statt als Gamepad mit X/Y/Z: Automobilista
 # 2 und Project CARS steuern ihr Menue ueber X/Y von Gamepads. Ein losgelassenes
@@ -60,26 +62,15 @@ except Exception as e:
 # davon kam am USB nur ein Bruchteil an. Mit 16 bit ist der Descriptor nicht
 # mehr die Engstelle.
 #
-# Report-Aufbau (8 Byte Nutzdaten, die Report-ID kommt vom Stack davor):
-#   Byte 0-1   Buttons 1-16, little endian
-#   Byte 2-3   Rx (Gas)
-#   Byte 4-5   Ry (Bremse)
-#   Byte 6-7   Rz (Kupplung)
+# Report-Aufbau (6 Byte Nutzdaten, die Report-ID kommt vom Stack davor):
+#   Byte 0-1   Rx (Gas),      little endian
+#   Byte 2-3   Ry (Bremse)
+#   Byte 4-5   Rz (Kupplung)
 GAMEPAD_DESCRIPTOR = bytes((
     0x05, 0x01,        # Usage Page (Generic Desktop)
     0x09, 0x04,        # Usage (Joystick)
     0xA1, 0x01,        # Collection (Application)
     0x85, 0x04,        #   Report ID (4)
-
-    # Buttons (16 Stueck, je 1 bit)
-    0x05, 0x09,        #   Usage Page (Button)
-    0x19, 0x01,        #   Usage Minimum (1)
-    0x29, 0x10,        #   Usage Maximum (16)
-    0x15, 0x00,        #   Logical Minimum (0)
-    0x25, 0x01,        #   Logical Maximum (1)
-    0x75, 0x01,        #   Report Size (1)
-    0x95, 0x10,        #   Report Count (16)
-    0x81, 0x02,        #   Input (Data, Variable, Absolute)
 
     # Achsen Rx, Ry, Rz (je 16 bit, 0..65535)
     0x05, 0x01,                    #   Usage Page (Generic Desktop)
@@ -101,7 +92,7 @@ gamepad = usb_hid.Device(
     usage_page=0x01,         # Generic Desktop
     usage=0x04,              # Joystick (muss zu code.py passen)
     report_ids=(4,),
-    in_report_lengths=(8,),  # 2 Byte Buttons + 6 Byte Achsen
+    in_report_lengths=(6,),  # 3 Achsen zu je 2 Byte
     out_report_lengths=(0,),
 )
 
@@ -152,4 +143,4 @@ if meldungen:
     for m in meldungen:
         print("  -", m)
 else:
-    print("boot.py ok - Joystick aktiv (16 bit), Laufwerk aus, Datenkanal an")
+    print("boot.py ok - Joystick aktiv (16 bit, ohne Buttons), Laufwerk aus, Datenkanal an")
