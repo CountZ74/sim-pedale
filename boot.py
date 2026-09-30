@@ -14,11 +14,15 @@ import usb_hid
 
 TASTER_PIN = "GP3"          # muss zu WIFI_BTN_PIN in settings.py passen
 
-# Gamepad HID Descriptor
-# 3 Achsen (X, Y, Z) mit je 8 bit (-127 bis 127), 16 Buttons
+# Joystick HID Descriptor (v9.6)
+# 3 Achsen (Rx, Ry, Rz) mit je 8 bit (-127 bis 127), 16 Buttons
+#
+# Bewusst KEIN Gamepad und KEINE Achsen X/Y: Spiele wie Automobilista 2 und
+# Project CARS steuern ihr Menue ueber X/Y von Gamepads. Ein losgelassenes
+# Pedal sendet -127 (Anschlag), das Menue scrollte dadurch von selbst.
 GAMEPAD_DESCRIPTOR = bytes((
     0x05, 0x01,        # Usage Page (Generic Desktop)
-    0x09, 0x05,        # Usage (Gamepad)
+    0x09, 0x04,        # Usage (Joystick)
     0xA1, 0x01,        # Collection (Application)
     0x85, 0x04,        #   Report ID (4)
     # Buttons (16 Stueck, je 1 bit)
@@ -30,13 +34,13 @@ GAMEPAD_DESCRIPTOR = bytes((
     0x75, 0x01,        #   Report Size (1)
     0x95, 0x10,        #   Report Count (16)
     0x81, 0x02,        #   Input (Data, Variable, Absolute)
-    # Achsen X, Y, Z (je 8 bit, -127 bis 127)
+    # Achsen Rx, Ry, Rz (je 8 bit, -127 bis 127)
     0x05, 0x01,        #   Usage Page (Generic Desktop)
     0x15, 0x81,        #   Logical Minimum (-127)
     0x25, 0x7F,        #   Logical Maximum (127)
-    0x09, 0x30,        #   Usage (X)
-    0x09, 0x31,        #   Usage (Y)
-    0x09, 0x32,        #   Usage (Z)
+    0x09, 0x33,        #   Usage (Rx)  Gas
+    0x09, 0x34,        #   Usage (Ry)  Bremse
+    0x09, 0x35,        #   Usage (Rz)  Kupplung
     0x75, 0x08,        #   Report Size (8)
     0x95, 0x03,        #   Report Count (3)
     0x81, 0x02,        #   Input (Data, Variable, Absolute)
@@ -46,7 +50,7 @@ GAMEPAD_DESCRIPTOR = bytes((
 gamepad = usb_hid.Device(
     report_descriptor=GAMEPAD_DESCRIPTOR,
     usage_page=0x01,         # Generic Desktop
-    usage=0x05,              # Gamepad
+    usage=0x04,              # Joystick (muss zu code.py passen)
     report_ids=(4,),
     in_report_lengths=(5,),  # 2 Byte Buttons + 3 Byte Achsen
     out_report_lengths=(0,),

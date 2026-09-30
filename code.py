@@ -1,6 +1,12 @@
 """
-Pico W Pedale Controller v9.5 - Wraparound-Kalibrierung + schneller Webserver
+Pico W Pedale Controller v9.6 - Wraparound-Kalibrierung + schneller Webserver
 =============================================================================
+v9.6: Der Pico meldet sich als Joystick mit den Achsen Rx/Ry/Rz statt als
+      Gamepad mit X/Y/Z. Grund: Automobilista 2 (und Project CARS) lassen
+      Gamepads das Menue steuern; das Pedal in Ruhestellung (-127) wurde als
+      dauernd gedrueckte Richtung gelesen. Achszuordnung im Spiel muss nach
+      dem Update neu vorgenommen werden. Aendert boot.py UND code.py.
+
 v9.5: Der HX711 wird ueber die PIO-Einheit des RP2040 ausgelesen statt per
       Bit-Banging in Python. Die Bibliothek brauchte 13,8 ms pro Lesung - mehr
       als die 12,5 ms Wandlungsdauer bei 80 Hz, deshalb kam nur jede zweite
@@ -343,7 +349,7 @@ def led_blink(n, an=100, aus=100):
 
 gamepad_device = None
 for device in usb_hid.devices:
-    if device.usage == 0x05 and device.usage_page == 0x01:
+    if device.usage == 0x04 and device.usage_page == 0x01:   # Joystick, siehe boot.py
         gamepad_device = device
         break
 
@@ -913,7 +919,7 @@ except OSError:
     print("Achtung: Dateisystem schreibgeschuetzt, Kalibrierung nur im RAM")
 
 led_blink(3, an=150, aus=150)
-print("Pico W Pedale v9.5 bereit - Bremse:", BREMSE_TYP, hx_modus,
+print("Pico W Pedale v9.6 bereit - Bremse:", BREMSE_TYP, hx_modus,
       "- HID:", "ja" if gamepad_device else "NEIN")
 time.sleep(1.0)
 

@@ -2,7 +2,7 @@
 
 Firmware für einen selbstgebauten Pedalsatz fürs Sim-Racing. Läuft mit
 CircuitPython auf einem Raspberry Pi Pico W und meldet sich am PC als
-USB-Gamepad mit drei Achsen.
+USB-Joystick mit drei Achsen (Rx, Ry, Rz).
 
 ## Hardware
 
