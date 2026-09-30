@@ -1,93 +1,83 @@
-# Pico W Pedale Controller
-
-Firmware für einen selbstgebauten Pedalsatz fürs Sim-Racing. Läuft mit
-CircuitPython auf einem Raspberry Pi Pico W und meldet sich am PC als
-USB-Gamepad mit drei Achsen.
+# Pico W Pedale Controller v3
+FreeJoy-Ersatz mit WLAN-Konfigurator im Browser
 
 ## Hardware
 
-| Pin  | Anschluss |
-|------|-----------|
-| GP26 | AS5600 Gas, Analogausgang |
-| GP27 | AS5600 Bremse, Analogausgang (oder HX711 DT) |
-| GP28 | AS5600 Kupplung, Analogausgang |
-| GP0  | HX711 SCK |
-| GP1  | HX711 DT |
-| GP3  | Taster WLAN, gegen GND |
-| GP16 | Status-LED, über 330 Ω gegen GND |
+| Bauteil | Anzahl |
+|---|---|
+| Raspberry Pi Pico **W** | 1 |
+| AS5600 (analog OUT) | 3 |
+| Taster (Momentary) | 1 |
+| LED | 1 |
+| Widerstand 330Ω | 1 |
 
-Gas und Kupplung messen den Winkel mit einem AS5600. Der Magnet sitzt auf einer
-Zahnriemenscheibe, die über einen federgespannten Riemen am Pedalarm hängt —
-dadurch sieht der Sensor mehr Weg als das Pedal und die Auflösung steigt.
-
-Die Bremse arbeitet wahlweise genauso oder über eine Wägezelle am HX711
-(`BREMSE_TYP` in `settings.py`). Kraftmessung entspricht dem Verhalten einer
-echten Bremse deutlich besser als Wegmessung.
-
-## Dateien
-
-| Datei | Zweck |
-|-------|-------|
-| `code.py` | Firmware |
-| `boot.py` | HID-Descriptor, USB-Laufwerk, Wartungsmodus |
-| `settings.py` | Konfiguration |
-| `index.html` | Weboberfläche, wird aus dem Flash ausgeliefert |
-| `test_wrap.py` | Prüft die Kalibriermathematik, **läuft am PC** |
-| `test_pio_hx711.py` | Prüft den PIO-Reader, läuft auf dem Pico |
-
-Alles außer `test_wrap.py` gehört ins Root von CIRCUITPY, nicht nach `lib/`.
-
-## Abhängigkeiten in `lib/`
+## Verkabelung
 
 ```
-adafruit_debouncer.mpy
-adafruit_ticks.mpy
-adafruit_pioasm.mpy          # nur bei HX711_MODE = "pio"
-adafruit_hx711/              # nur bei HX711_MODE = "bitbang"
+Pico GP26  ──── AS5600 Gas      OUT
+Pico GP27  ──── AS5600 Bremse   OUT
+Pico GP28  ──── AS5600 Kupplung OUT
+
+Pico GP3   ──── Taster ──── GND
+
+Pico GP16  ──── 330Ω ──── LED ──── GND
+
+Pico 3V3   ──── AS5600 VCC (alle drei)
+Pico GND   ──── AS5600 GND (alle drei)
 ```
+
+## Dateien auf den Pico W kopieren
+
+```
+/ (Root)
+├── boot.py
+├── code.py
+├── settings.py
+└── lib/
+    ├── adafruit_hid/
+    └── adafruit_debouncer.mpy
+```
+
+CircuitPython für Pico W: https://circuitpython.org/board/raspberry_pi_pico_w/
+Libraries: https://circuitpython.org/libraries
 
 ## Bedienung
 
-Taster an GP3 startet den Access Point (`Pico-Pedale`). Weboberfläche unter
-http://192.168.4.1 — Kalibrierung und Kennlinien. Taster nochmal drücken
-beendet den AP.
+### Normalbetrieb (HID-Modus)
+- Pico läuft als USB Gamepad
+- LED aus
+- Taster kurz drücken → WLAN startet
 
-Kalibriert wird per Sweep: Nullpunkt bei losgelassenem Pedal setzen, dann
-zwei-, dreimal voll durchtreten, fertig. Weg und Richtung ergeben sich von
-selbst.
+### WLAN/Kalibrierungs-Modus
+- LED blinkt schnell
+- Mit Handy oder PC mit WLAN **"Pico-Pedale"** verbinden
+  Passwort: `pedale123` (änderbar in settings.py)
+- Browser öffnen: **http://192.168.4.1**
+- Achse kalibrieren:
+  1. "Kalibrieren" bei gewünschter Achse klicken
+  2. Pedal vollständig loslassen
+  3. "Startpunkt setzen" klicken
+  4. Pedal vollständig durchtreten
+  5. "Endpunkt setzen" klicken → automatisch gespeichert ✅
+- Taster kurz drücken **oder** "WLAN aus" im Browser → zurück zu HID
 
-## Wartungsmodus
+### LED-Signale
+| Muster | Bedeutung |
+|---|---|
+| 3× langsam beim Start | Bereit |
+| Schnelles Dauerblinken | WLAN aktiv |
+| 2× kurz | WLAN gestartet |
+| 3× kurz | Kalibrierung gespeichert |
+| 3× langsam | Zurück zu HID |
 
-`boot.py` blendet das USB-Laufwerk CIRCUITPY aus, damit der Pico seine
-`calibration.json` selbst schreiben kann. Beides gleichzeitig geht nicht.
+## Dateien bearbeiten (Thonny empfohlen)
+Da boot.py den USB-Massenspeicher deaktiviert:
+- **Thonny IDE** verwenden (verbindet über serielle Schnittstelle)
+- Oder: Pico mit gedrücktem **BOOTSEL** einstecken → erscheint als RPI-RP2
 
-Um an die Dateien zu kommen: **GP3-Taster beim Einstecken gedrückt halten.**
-Dann bleibt das Laufwerk sichtbar — der Pico kann dann allerdings nicht
-speichern, die Weboberfläche weist oben darauf hin.
-
-## Zwei Dinge, die nicht offensichtlich sind
-
-**Wraparound.** Der AS5600 springt am Nulldurchgang von 65535 auf 0. Läuft der
-Pedalweg über diese Grenze, ist eine min/max-Kalibrierung wertlos. Deshalb wird
-ein Nullpunkt und ein vorzeichenbehafteter Weg gespeichert und modulo 65536
-gerechnet. Wege bis zu einer vollen Umdrehung sind möglich, die Grenze darf
-beliebig oft überquert werden.
-
-**HX711-Datenrate.** Ab Werk laufen die Module mit 10 Messungen pro Sekunde —
-für ein Bremspedal unbrauchbar. Die Lötbrücke auf dem Board schaltet auf 80 Hz.
-Danach ist die Bibliothek der Engpass: sie klopft die 25 Taktimpulse einzeln in
-Python aus und braucht 13,8 ms, mehr als die 12,5 ms Wandlungsdauer. Deshalb
-liest die Firmware den HX711 über die PIO-Einheit des RP2040 aus, das kostet
-rund 225 µs.
-
-## Tests
-
-```bash
-python3 test_wrap.py     # am PC, prüft die Kalibriermathematik
-```
-
-Auf dem Pico, im REPL nach Strg+C:
-
+## settings.py anpassen
 ```python
-import test_pio_hx711    # misst Datenrate und Lesezeit des HX711
+AP_SSID     = "Pico-Pedale"   # WLAN-Name
+AP_PASSWORD = "pedale123"     # Passwort (min. 8 Zeichen)
+AP_CHANNEL  = 6               # WLAN-Kanal
 ```
