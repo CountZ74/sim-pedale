@@ -51,6 +51,61 @@ SWEEP_MARGIN_PCT = 2.0
 # Startwert fuer die Waegezelle, bevor zum ersten Mal kalibriert wurde.
 HX711_MAX_DEFAULT = 50000
 
+# ---------------------------------------------------------------------------
+# Rumble - neu in v9.7
+# ---------------------------------------------------------------------------
+
+# Je Kanal (IN1, IN2) am DRV8871.
+#
+# WICHTIG: Beide Pins eines Kanals muessen auf derselben PWM-Einheit des RP2040
+# liegen, sonst funktioniert die Ansteuerung im unteren Bereich schlecht. Das
+# ist genau dann der Fall, wenn der erste Pin gerade ist und der zweite direkt
+# darauf folgt: GP4/GP5, GP6/GP7, GP8/GP9, ...
+RUMBLE_PINS  = [("GP4", "GP5"), ("GP6", "GP7")]
+RUMBLE_NAMEN = ["Bremse", "Gas"]
+
+# Gemessene Spannung am Treiber und Nennspannung der Motoren. Ist die
+# Versorgung hoeher, deckelt die Firmware das Duty so, dass der Motor im Mittel
+# nur seine Nennspannung sieht. Bei gleichen Werten gibt es keinen Deckel.
+RUMBLE_VERSORGUNG = 15.0
+RUMBLE_MOTOR_NENN = 12.0
+
+RUMBLE_PWM_HZ   = 20000   # ueber dem Hoerbereich
+RUMBLE_KICK_MS  = 50      # Anlaufimpuls, nur unterhalb der Losbrechschwelle
+RUMBLE_BREMS_MS = 80      # aktives Bremsen beim Abschalten
+
+# Startwert fuer "Brems ms" im Rumble-Tab. Ab dann steht der Wert je Kanal in
+# rumble.json und wird hier nicht mehr gelesen.
+#
+# Er sagt, wie lange eine Nullphase ausgelaufen wird, bevor aktiv gestoppt
+# wird - ein Charakterregler, kein Stellwert fuer die Staerke:
+#
+#   0 ms   Jeder Impuls wird sofort gestoppt. Die Schlaege sind klar
+#          voneinander getrennt. Fuer ABS, Randsteine, Schaltruck.
+#   hoch   Kurze Luecken laufen aus, aufeinanderfolgende Impulse verschmelzen
+#          zu durchgehender Vibration. Fuer Fahrbahn und Radschlupf.
+RUMBLE_BREMS_VERZUG_MS = 0
+
+# Namen, unter denen SimHub die Effektstaerken schickt - Reihenfolge wie
+# RUMBLE_PINS. Frei waehlbar, muessen nur zur Formel in SimHub passen.
+TELE_NAMEN = ["bremse", "gas"]
+
+# Wertebereich, den SimHub schickt. 100 = Prozent (0..100), 1 = Anteil (0..1).
+TELE_MAX = 100.0
+
+# Kommt so lange nichts Neues, gelten die Werte als ungueltig und die Motoren
+# gehen aus. Verhindert, dass ein Motor weiterlaeuft, wenn SimHub abstuerzt.
+TELE_TIMEOUT = 2.0
+
+# Gleitender Mittelwert ueber N Wandlungen der Waegezelle.
+#
+# Braucht man, sobald ein Rumble-Motor am Bremspad sitzt: der HX711 tastet mit
+# 80 Hz ab, der Motor rappelt mit rund 50 Hz, und die Differenz faltet sich als
+# 30-Hz-Zappeln in den Bremswert. 8 Messungen lassen rund 10 Hz durch - fuer
+# einen Fuss, der mit vielleicht 3 Hz dosiert, mehr als genug.
+# 1 schaltet den Filter ab.
+HX_FILTER = 8
+
 # HID auch senden, waehrend der Access Point laeuft. In v8 waren die Pedale
 # im WLAN-Modus tot. Auf False setzen, wenn beim Kalibrieren keine Achswerte
 # ins Spiel gelangen sollen.

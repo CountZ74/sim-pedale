@@ -1,6 +1,30 @@
 """
-Pico W Pedale Controller v9.5 - Wraparound-Kalibrierung + schneller Webserver
+Pico W Pedale Controller v9.7 - Wraparound-Kalibrierung + schneller Webserver
 =============================================================================
+v9.7: Rumble. Zwei Vibrationsmotoren an je einem DRV8871, angesteuert im
+      slow-decay-Verfahren (IN1 fest an, invertierte PWM auf IN2). Am realen
+      Aufbau gemessen sinkt die Abfallschwelle dadurch von 60 auf 6 Prozent -
+      Faktor zehn mehr Regelbereich als mit der naheliegenden Variante.
+      Die Effekte rechnet der Pico NICHT selbst aus: SimHubs ShakeIt-Motoren
+      koennen ihren Ausgangswert als Property exportieren, und die geht ueber
+      den seriellen Kanal hierher. Die Effektbibliothek dort ist besser als
+      alles, was in diese Firmware passen wuerde.
+      Dazu ein gleitender Mittelwert auf der Waegezelle: ein Motor am Bremspad
+      erzeugt im Kraftfluss eine echte Wechselkraft, die sich bei 50 Hz Motor
+      und 80 Hz Abtastrate als 30-Hz-Zappeln in den Bremswert faltet.
+
+v9.6: Die HID-Achsen haben 16 statt 8 bit. Vorher gingen 255 Stufen ans
+      Spiel, obwohl der AS5600 ueber einen typischen Pedalweg rund 1200 bis
+      2400 unterscheidbare Werte liefert und die Waegezelle noch mehr - der
+      Descriptor war die Engstelle, nicht die Mechanik. Spuerbar wird das vor
+      allem, wenn ein Spiel eine eigene Kennlinie darueberlegt: die spreizt
+      den unteren Bereich und damit auch die Quantisierungsstufen.
+      Dazu wird im Ausgabepfad ueber HID_MITTEL Messungen gemittelt, sonst
+      traegt ein Teil der neuen Bits nur ADC-Rauschen.
+      ACHTUNG: geaenderter Descriptor und eigene USB-PID - Windows sieht ein
+      neues Geraet, alle Achszuweisungen im Spiel muessen einmal neu gesetzt
+      werden.
+
 v9.5: Der HX711 wird ueber die PIO-Einheit des RP2040 ausgelesen statt per
       Bit-Banging in Python. Die Bibliothek brauchte 13,8 ms pro Lesung - mehr
       als die 12,5 ms Wandlungsdauer bei 80 Hz, deshalb kam nur jede zweite
@@ -89,6 +113,7 @@ Optionale Eintraege in settings.py (alle mit sinnvollen Defaults)
 """
 
 import board, time, analogio, digitalio, usb_hid, json, wifi, socketpool, gc, os
+import pwmio
 from adafruit_debouncer import Debouncer
 import settings
 
@@ -100,6 +125,18 @@ INDEX_FILE       = "/index.html"
 ADC_SPAN      = 65536          # Wertebereich des ADC, entspricht 360 Grad
 HALF_SPAN     = ADC_SPAN // 2
 DEBOUNCE_MS   = 0.05
+
+# Groesster Wert einer HID-Achse. Muss zum Descriptor in boot.py passen:
+# 16 bit unsigned, Logical Maximum 65535.
+AXIS_MAX      = 65535
+
+# Wieviele ADC-Messungen fuer einen HID-Wert gemittelt werden. Mit 8-bit-Achsen
+# war das egal - eine Stufe war so grob, dass Rauschen darin verschwand. Bei
+# 16 bit sieht man es, also mitteln wir. Vier Messungen halbieren das Rauschen
+# und kosten keine spuerbare Verzoegerung, weil sie unmittelbar hintereinander
+# genommen werden (kein gleitender Mittelwert, keine Traegheit).
+# 1 schaltet die Mittelung ab.
+HID_MITTEL    = 4
 DEFAULT_CURVE = [[0, 0], [25, 25], [50, 50], [75, 75], [100, 100]]
 BREMSE_IDX    = 1
 
@@ -288,6 +325,42 @@ else:
 
 # --- Achsen lesen ------------------------------------------------------------
 
+# Gleitender Mittelwert ueber die Waegezelle.
+#
+# Sitzt ein Rumble-Motor am Bremspad, erzeugt er im Kraftfluss zwischen Pad und
+# Rahmen eine echte Wechselkraft - die Waegezelle misst sie zu Recht mit. Bei
+# rund 50 Hz Motorfrequenz und 80 Hz Abtastrate faltet sich das als 30-Hz-
+# Zappeln in den Bremswert. Gemittelt wird ueber echte Wandlungen, erkennbar an
+# hx_count; ohne diese Bedingung wuerde derselbe Wert mehrfach einlaufen und
+# der Filter waere wirkungslos.
+HX_FILTER = getattr(settings, "HX_FILTER", 8)
+if HX_FILTER < 1:
+    HX_FILTER = 1
+
+_hxf_buf   = [0] * HX_FILTER
+_hxf_i     = 0
+_hxf_summe = 0
+_hxf_count = -1
+_hxf_init  = False
+
+def hx_glaetten(v):
+    global _hxf_i, _hxf_summe, _hxf_count, _hxf_init
+    if HX_FILTER <= 1:
+        return v
+    if not _hxf_init:
+        for i in range(HX_FILTER):
+            _hxf_buf[i] = v
+        _hxf_summe = v * HX_FILTER
+        _hxf_count = hx_count
+        _hxf_init  = True
+        return v
+    if hx_count != _hxf_count:
+        _hxf_count  = hx_count
+        _hxf_summe += v - _hxf_buf[_hxf_i]
+        _hxf_buf[_hxf_i] = v
+        _hxf_i = (_hxf_i + 1) % HX_FILTER
+    return _hxf_summe // HX_FILTER
+
 def achse_raw(idx):
     """Ein einzelner Rohwert. Bei der Waegezelle bereits tariert und >= 0."""
     if idx == 0:
@@ -295,7 +368,7 @@ def achse_raw(idx):
     if idx == 2:
         return adc_kupplung.value
     if BREMSE_TYP == "hx711":
-        v = hx_poll() - hx_tare
+        v = hx_glaetten(hx_poll() - hx_tare)
         return v if v > 0 else 0
     return adc_bremse.value
 
@@ -347,18 +420,23 @@ for device in usb_hid.devices:
         gamepad_device = device
         break
 
-_report      = bytearray(5)
-_last_report = bytearray(5)
+_report      = bytearray(8)
+_last_report = bytearray(8)
 
 def gamepad_senden(x, y, z, buttons=0):
+    """Report zusammenbauen: 2 Byte Buttons, dann 3 Achsen zu je 16 bit.
+
+    Alles little endian, unsigned 0..65535 - passend zum Descriptor in boot.py.
+    """
     if not gamepad_device:
         return
     b = buttons & 0xFFFF
     _report[0] = b & 0xFF
     _report[1] = (b >> 8) & 0xFF
     for i, v in enumerate((x, y, z)):
-        v = -127 if v < -127 else (127 if v > 127 else v)
-        _report[2 + i] = v if v >= 0 else 256 + v
+        v = 0 if v < 0 else (AXIS_MAX if v > AXIS_MAX else int(v))
+        _report[2 + 2 * i] = v & 0xFF
+        _report[3 + 2 * i] = (v >> 8) & 0xFF
     if _report == _last_report:          # unveraenderte Reports sparen wir uns
         return
     _last_report[:] = _report
@@ -366,6 +444,381 @@ def gamepad_senden(x, y, z, buttons=0):
         gamepad_device.send_report(_report, 4)
     except OSError:
         pass
+
+# --- Rumble ------------------------------------------------------------------
+#
+# Zwei Vibrationsmotoren an je einem DRV8871. Angesteuert wird im "slow decay"-
+# Verfahren: IN1 liegt fest an, IN2 bekommt die INVERTIERTE PWM. Zwischen den
+# Impulsen wird die Wicklung dadurch kurzgeschlossen statt geoeffnet, der Strom
+# bricht weniger ein und das Drehmoment bei kleinem Duty ist viel hoeher.
+#
+# Am realen Aufbau gemessen: die Abfallschwelle sinkt damit von 60 auf 6
+# Prozent. Faktor zehn mehr Regelbereich, fuer zwei Zeilen Code.
+#
+# Voraussetzung: IN1 und IN2 eines Kanals muessen auf derselben PWM-Einheit des
+# RP2040 liegen, sonst laufen die Signale auseinander. Das ist genau dann der
+# Fall, wenn der erste Pin gerade ist und der zweite direkt darauf folgt -
+# GP4/GP5, GP6/GP7, GP8/GP9. Die Firmware prueft das und meckert sonst.
+
+RUMBLE_DATEI = "/rumble.json"
+
+# Alles per getattr, damit eine aeltere settings.py den Start nicht verhindert.
+RB_PINS   = getattr(settings, "RUMBLE_PINS", [])
+RB_NAMEN  = getattr(settings, "RUMBLE_NAMEN", ["Kanal 1", "Kanal 2"])
+RB_VERS   = getattr(settings, "RUMBLE_VERSORGUNG", 12.0)
+RB_NENN   = getattr(settings, "RUMBLE_MOTOR_NENN", 12.0)
+RB_HZ     = getattr(settings, "RUMBLE_PWM_HZ", 20000)
+RB_KICK   = getattr(settings, "RUMBLE_KICK_MS", 50)
+RB_BREMS  = getattr(settings, "RUMBLE_BREMS_MS", 80)
+RB_BREMS_VERZUG = getattr(settings, "RUMBLE_BREMS_VERZUG_MS", 120)
+TELE_NAMEN   = getattr(settings, "TELE_NAMEN", ["bremse", "gas"])
+TELE_MAX     = getattr(settings, "TELE_MAX", 100.0) or 1.0
+TELE_TIMEOUT = getattr(settings, "TELE_TIMEOUT", 2.0)
+
+# Deckel, damit ein 12-V-Motor an einer hoeheren Versorgung im Mittel nur seine
+# Nennspannung sieht. Bei gleicher Versorgung wird daraus 65535, also kein
+# Deckel. Der Kickstart darf bewusst darueber gehen.
+RUMBLE_DECKEL = int(AXIS_MAX * RB_NENN / RB_VERS)
+if RUMBLE_DECKEL > AXIS_MAX:
+    RUMBLE_DECKEL = AXIS_MAX
+
+RUMBLE_N = len(RB_PINS)
+
+_rb_in1 = []
+_rb_in2 = []
+
+for _p1, _p2 in RB_PINS:
+    try:
+        _rb_in1.append(pwmio.PWMOut(getattr(board, _p1),
+                                    frequency=RB_HZ,
+                                    duty_cycle=0))
+        _rb_in2.append(pwmio.PWMOut(getattr(board, _p2),
+                                    frequency=RB_HZ,
+                                    duty_cycle=0))
+        if not (int(_p1[2:]) % 2 == 0 and int(_p2[2:]) == int(_p1[2:]) + 1):
+            print("Rumble: %s/%s nicht auf derselben PWM-Einheit -"
+                  " der untere Regelbereich wird schlecht" % (_p1, _p2))
+    except Exception as e:
+        print("Rumble-Pins %s/%s nicht nutzbar: %s" % (_p1, _p2, e))
+        _rb_in1.append(None)
+        _rb_in2.append(None)
+
+rumble_da = any(x is not None for x in _rb_in1)
+
+# Sollwert 0.0 .. 1.0 je Kanal, plus Zustandsmaschine fuer Kick und Bremsen
+_rb_soll   = [0.0] * RUMBLE_N
+_rb_ist    = [0.0] * RUMBLE_N          # nur fuer die Anzeige
+_rb_phase  = ["aus"] * RUMBLE_N        # aus | kick | lauf | brems
+_rb_bis    = [0.0] * RUMBLE_N          # Ende der aktuellen Phase
+_rb_test   = [None] * RUMBLE_N         # Handbetrieb aus der Weboberflaeche
+_rb_test_bis = [0.0] * RUMBLE_N        # Totmannschaltung je Kanal
+_rb_seq    = -1                        # hoechste gesehene Anforderungsnummer
+_rb_sperre = 0.0                       # nach dem Not-Aus kurz nichts annehmen
+
+# Ein Testwert verfaellt nach dieser Zeit, wenn ihn niemand erneuert. Die
+# Weboberflaeche schickt waehrend eines Tests alle 400 ms ein Lebenszeichen.
+# Bricht die Verbindung ab, schliesst der Browser oder haengt das WLAN, steht
+# der Motor also nach gut einer Sekunde - und nicht erst, wenn jemand den
+# Stecker zieht.
+RB_TEST_TTL = 1.2
+
+def rumble_default():
+    return [{"schwelle": 4, "min": 8, "max": 100, "kick": 12, "gain": 100,
+             "brems": RB_BREMS_VERZUG, "an": True}
+            for _ in range(RUMBLE_N)]
+
+def rumble_laden():
+    cfg = rumble_default()
+    try:
+        with open(RUMBLE_DATEI) as f:
+            d = json.load(f)
+        for i in range(RUMBLE_N):
+            if i < len(d) and isinstance(d[i], dict):
+                cfg[i].update(d[i])
+    except Exception:
+        pass
+    return cfg
+
+def rumble_speichern():
+    try:
+        with open(RUMBLE_DATEI, "w") as f:
+            json.dump(rumble_cfg, f)
+        return True
+    except Exception as e:
+        print("Rumble-Einstellungen nicht speicherbar:", e)
+        return False
+
+rumble_cfg = rumble_laden()
+
+def _rb_roh(k, duty):
+    """Rohe Ansteuerung ohne Deckel. duty 0..65535."""
+    if _rb_in1[k] is None:
+        return
+    if duty < 0:
+        duty = 0
+    elif duty > AXIS_MAX:
+        duty = AXIS_MAX
+    _rb_in1[k].duty_cycle = AXIS_MAX
+    _rb_in2[k].duty_cycle = AXIS_MAX - duty
+
+def _rb_frei(k):
+    """Auslaufen lassen: beide Eingaenge aus."""
+    if _rb_in1[k] is None:
+        return
+    _rb_in1[k].duty_cycle = 0
+    _rb_in2[k].duty_cycle = 0
+
+def _rb_bremsen(k):
+    """Beide Eingaenge an: Motor kurzgeschlossen, die Unwucht steht sofort."""
+    if _rb_in1[k] is None:
+        return
+    _rb_in1[k].duty_cycle = AXIS_MAX
+    _rb_in2[k].duty_cycle = AXIS_MAX
+
+def _rb_schwelle(c, e):
+    """Schwelle anwenden und den Rest auf 0..1 spreizen.
+
+    Ohne das fuehrt jeder Effektwert ueber null sofort zur Mindestdrehzahl -
+    ein Fahrbahneffekt, der staendig bei zwei, drei Prozent rauscht, laesst den
+    Motor dann die ganze Runde brummen. Kein Kontrast mehr, und der Motor
+    laeuft dauernd. Mit Schwelle bleibt er unten wirklich aus.
+
+    Uebernommen von SimHubs Motorausgang, der genau diese zwei Regler hat:
+    Threshold (hier) und Minimum force (unser "min"). Die Schwelle wirkt
+    zuerst, die Untergrenze danach.
+    """
+    schw = c.get("schwelle", 0) / 100.0
+    if schw <= 0.0:
+        return e
+    if e <= schw:
+        return 0.0
+    if schw >= 1.0:
+        return 1.0
+    return (e - schw) / (1.0 - schw)
+
+def _rb_duty(k, e):
+    """Effektstaerke 0..1 -> Duty. Unterhalb von min passiert nichts Sinnvolles,
+    deshalb wird der Bereich min..max gespreizt statt bei null anzufangen."""
+    c = rumble_cfg[k]
+    p = c["min"] + e * (c["max"] - c["min"])
+    if p < 0:
+        p = 0
+    elif p > 100:
+        p = 100
+    return int(RUMBLE_DECKEL * p / 100)
+
+def rumble_soll(k, e):
+    """Sollwert setzen, 0.0 .. 1.0."""
+    if e < 0:
+        e = 0.0
+    elif e > 1:
+        e = 1.0
+    _rb_soll[k] = e
+
+def rumble_test_setz(k, v, seq=None):
+    """Handbetrieb aus der Weboberflaeche. v in Prozent, negativ beendet ihn.
+
+    seq ist eine aufsteigende Nummer des Browsers. Ein Schieberegler erzeugt
+    viele Anforderungen kurz hintereinander; wenn der Pico nicht hinterherkommt,
+    stauen sie sich und werden verspaetet abgearbeitet. Ohne Reihenfolgeschutz
+    ueberschreibt dann eine alte Anforderung das spaetere "aus" - der Motor
+    laeuft mit einem Wert weiter, den niemand mehr haben will. Genau das ist
+    beim ersten Test passiert.
+    """
+    global _rb_seq
+    if k < 0 or k >= RUMBLE_N:
+        return
+    if time.monotonic() < _rb_sperre:      # Not-Aus hat Vorrang
+        return
+    if seq is not None:
+        if seq <= _rb_seq:
+            return                          # ueberholte Anforderung, verwerfen
+        _rb_seq = seq
+    if v is None or v < 0:
+        _rb_test[k]     = None
+        _rb_test_bis[k] = 0.0
+    else:
+        _rb_test[k]     = min(1.0, v / 100.0)
+        _rb_test_bis[k] = time.monotonic() + RB_TEST_TTL
+
+def rumble_not_aus():
+    """Alles sofort aus und fuer zwei Sekunden nichts mehr annehmen.
+
+    Die Sperre ist wichtig: ohne sie koennte eine noch in der Warteschlange
+    steckende Anforderung den Motor direkt wieder anwerfen.
+    """
+    global _rb_sperre
+    _rb_sperre = time.monotonic() + 2.0
+    rumble_alles_aus()
+
+def rumble_alles_aus():
+    for k in range(RUMBLE_N):
+        _rb_soll[k]     = 0.0
+        _rb_test[k]     = None
+        _rb_test_bis[k] = 0.0
+
+def rumble_step():
+    """Muss in jeder Runde der Hauptschleife laufen. Blockiert nie."""
+    if not rumble_da:
+        return
+    now = time.monotonic()
+
+    for k in range(RUMBLE_N):
+        if _rb_in1[k] is None:
+            continue
+        # Totmannschaltung: kein Lebenszeichen mehr, also aus.
+        if _rb_test[k] is not None and now > _rb_test_bis[k]:
+            _rb_test[k]     = None
+            _rb_test_bis[k] = 0.0
+        c = rumble_cfg[k]
+        e = _rb_soll[k] if _rb_test[k] is None else _rb_test[k]
+        if not c.get("an", True):
+            e = 0.0
+        e = _rb_schwelle(c, e)
+        _rb_ist[k] = e          # nach der Schwelle, damit der Balken zum Motor passt
+        phase = _rb_phase[k]
+
+        if e <= 0.004:                       # aus
+            # "brems" je Kanal entscheidet, wie lange eine Nullphase
+            # ausgelaufen wird, bevor aktiv gestoppt wird. Das ist ein
+            # Charakterregler, kein Stellwert fuer die Staerke:
+            #
+            #   0 ms   jeder Impuls wird sofort gestoppt. Die Schlaege sind
+            #          klar voneinander getrennt - ABS, Randstein, Schaltruck.
+            #   hoch   kurze Luecken laufen aus, die Impulse verschmelzen zu
+            #          durchgehender Vibration - Fahrbahn, Radschlupf.
+            #
+            # Am Rig nachgemessen, beide Varianten sind brauchbar.
+            if phase in ("kick", "lauf"):
+                _rb_frei(k)
+                _rb_phase[k] = "leer"
+                _rb_bis[k]   = now + c.get("brems", RB_BREMS_VERZUG) / 1000
+            elif phase == "leer" and now >= _rb_bis[k]:
+                _rb_bremsen(k)
+                _rb_phase[k] = "brems"
+                _rb_bis[k]   = now + RB_BREMS / 1000
+            elif phase == "brems" and now >= _rb_bis[k]:
+                _rb_frei(k)
+                _rb_phase[k] = "aus"
+            continue
+
+        if phase == "leer":
+            # Der Motor dreht noch - direkt weiterfahren, kein Kickstart.
+            _rb_roh(k, _rb_duty(k, e))
+            _rb_phase[k] = "lauf"
+        elif phase in ("aus", "brems"):
+            # Aus dem Stand: nur kicken, wenn der Sollwert unter der
+            # Losbrechschwelle liegt. Darueber laeuft er von selbst an.
+            ziel = c["min"] + e * (c["max"] - c["min"])
+            if ziel < c.get("kick", 0):
+                _rb_roh(k, AXIS_MAX)
+                _rb_phase[k] = "kick"
+                _rb_bis[k]   = now + RB_KICK / 1000
+            else:
+                _rb_roh(k, _rb_duty(k, e))
+                _rb_phase[k] = "lauf"
+        elif phase == "kick":
+            if now >= _rb_bis[k]:
+                _rb_roh(k, _rb_duty(k, e))
+                _rb_phase[k] = "lauf"
+        else:
+            _rb_roh(k, _rb_duty(k, e))
+
+# --- Telemetrie von SimHub ---------------------------------------------------
+#
+# Format wie bei der Buttonbox: name=wert;name=wert und ein Zeilenumbruch.
+# Der Pico rechnet hier nichts aus - die Effekte kommen fertig aus SimHubs
+# ShakeIt-Motoren, dort ist die Effektbibliothek ohnehin besser als alles,
+# was hier hineinpassen wuerde.
+
+try:
+    import usb_cdc
+    tele_port = usb_cdc.data
+except Exception:
+    tele_port = None
+
+tele        = {}
+tele_zeit   = 0.0
+tele_bytes  = 0
+tele_zeilen = 0
+tele_roh    = ""
+_tele_puffer = ""
+_tele_letzte = 0.0
+
+def _tele_zeile(zeile, now):
+    global tele, tele_zeit, tele_zeilen
+    zeile = zeile.strip()
+    if not zeile:
+        return
+    neu = {}
+    for teil in zeile.replace(",", ";").split(";"):
+        if "=" not in teil:
+            continue
+        name, _, wert = teil.partition("=")
+        name = name.strip().lower()
+        if not name:
+            continue
+        try:
+            neu[name] = float(wert.strip())
+        except ValueError:
+            s = wert.strip().lower()
+            neu[name] = 1.0 if s in ("true", "yes", "on") else 0.0
+    if neu:
+        tele.update(neu)
+        tele_zeit = now
+        tele_zeilen += 1
+
+def tele_lesen():
+    """Nicht blockierend. Muss in jeder Runde laufen."""
+    global tele, _tele_puffer, tele_bytes, tele_roh, _tele_letzte
+    now = time.monotonic()
+    if tele_port is not None:
+        try:
+            n = tele_port.in_waiting
+            if n:
+                roh = tele_port.read(n)
+                tele_bytes += len(roh)
+                _tele_letzte = now
+                text = roh.decode("utf-8", "ignore") if roh else ""
+                tele_roh = (tele_roh + text)[-80:]
+                _tele_puffer += text.replace("\r", "\n")
+                while "\n" in _tele_puffer:
+                    zeile, _tele_puffer = _tele_puffer.split("\n", 1)
+                    _tele_zeile(zeile, now)
+                if len(_tele_puffer) > 200:       # Muell, nie ein Zeilenende
+                    _tele_puffer = _tele_puffer[-200:]
+        except Exception:
+            pass
+    # Rettungsanker: Daten kommen an, aber ohne Zeilenumbruch. Passiert, wenn
+    # in SimHub das \n in der Formel fehlt - der haeufigste Anfaengerfehler.
+    if _tele_puffer and (now - _tele_letzte) > 0.5:
+        _tele_zeile(_tele_puffer, now)
+        _tele_puffer = ""
+
+    if tele and (now - tele_zeit) > TELE_TIMEOUT:
+        # SimHub weg oder Spiel beendet: Motoren aus, nicht im letzten
+        # Zustand haengen lassen.
+        tele.clear()
+        for k in range(RUMBLE_N):
+            _rb_soll[k] = 0.0
+
+    # Telemetrie auf die Kanaele legen
+    if tele:
+        skala = TELE_MAX
+        for k in range(RUMBLE_N):
+            name = TELE_NAMEN[k] if k < len(TELE_NAMEN) else ""
+            v = tele.get(name)
+            if v is None:
+                continue
+            rumble_soll(k, v / skala * rumble_cfg[k].get("gain", 100) / 100.0)
+
+def tele_zustand():
+    """0 = nichts empfangen, 1 = Daten ohne Zeile, 2 = verbunden."""
+    if tele_bytes == 0:
+        return 0
+    if tele_zeilen == 0:
+        return 1
+    return 2
 
 # --- Kalibrierung: Datenmodell ----------------------------------------------
 #
@@ -495,7 +948,9 @@ def raw_to_norm(raw, c):
     return (n - DEADZONE) / (1.0 - DEADZONE)
 
 def norm_to_axis(n):
-    return int(n * 254) - 127
+    """0.0 .. 1.0 -> 0 .. 65535 (unsigned, wie im Descriptor)."""
+    v = int(n * AXIS_MAX + 0.5)
+    return 0 if v < 0 else (AXIS_MAX if v > AXIS_MAX else v)
 
 def raw_to_axis(raw, c):
     return norm_to_axis(raw_to_norm(raw, c))
@@ -513,10 +968,15 @@ def pct_kurve(raw, c):
                               c.get("curve", DEFAULT_CURVE)))
 
 def achse_wert(raw, c):
-    """Endgueltiger HID-Wert inklusive Kennlinie."""
+    """Endgueltiger HID-Wert inklusive Kennlinie, 0 .. 65535.
+
+    Die Kennlinie rechnet in Prozent, aber als Fliesskomma - zwischen den
+    Stuetzpunkten wird linear interpoliert. Es geht also nichts verloren,
+    obwohl die Stuetzpunkte selbst ganze Prozent sind.
+    """
     p = kurve_anwenden(raw_to_norm(raw, c) * 100, c.get("curve", DEFAULT_CURVE))
     p = 0.0 if p < 0 else (100.0 if p > 100 else p)
-    return int(p / 100 * 254) - 127
+    return norm_to_axis(p / 100.0)
 
 # --- Zustand -----------------------------------------------------------------
 
@@ -540,6 +1000,7 @@ led_state         = False
 def sweep_start():
     """Nullpunkt setzen und Wegmessung zuruecksetzen."""
     global sweep_zero, sweep_hx, sweep_feld, hx_tare, cal_zustand
+    rumble_alles_aus()          # waehrend der Wegmessung nicht ruetteln
     idx = aktive_achse
     if idx == BREMSE_IDX and BREMSE_TYP == "hx711":
         time.sleep(0.2)
@@ -677,9 +1138,11 @@ def _send_all(conn, data):
             n = 0                           # Sendepuffer voll, gleich nochmal
         if n:
             mv = mv[n:]
-        elif time.monotonic() > ende:
+            continue
+        rumble_step()                       # auch hier: bis zu 5 s Wartezeit
+        if time.monotonic() > ende:
             break                           # Gegenstelle weg
-        elif cal_zustand == CAL_SWEEP:
+        if cal_zustand == CAL_SWEEP:
             sweep_update()
 
 def http_send(conn, status, ctype, body, cache=None):
@@ -735,8 +1198,11 @@ def _recv_warten(conn, buf, frist):
                 return n
         except OSError:
             pass                            # noch nichts da
+        rumble_step()               # Totmannschaltung darf nie stehenbleiben
         if cal_zustand == CAL_SWEEP:
             sweep_update()
+        else:
+            tele_lesen()
     return 0
 
 def request_lesen(conn):
@@ -795,6 +1261,12 @@ def zustand_json():
         "m":  cal_meldung,
         "fs": cal_schreibbar,
         "hz": hx_rate,
+        "rb": [int(_rb_ist[k] * 100) for k in range(RUMBLE_N)],
+        "tz": tele_zustand(),
+        "tb": tele_bytes,
+        "tl": tele_zeilen,
+        "tr": tele_roh[-40:],
+        "tv": {n: tele.get(n) for n in TELE_NAMEN if n in tele},
     }
 
 def handle(conn):
@@ -814,6 +1286,10 @@ def handle(conn):
             "n":  list(settings.ACHS_NAMEN),
             "cv": [c.get("curve", [list(p) for p in DEFAULT_CURVE]) for c in cal],
             "t":  [c.get("typ", "adc") for c in cal],
+            "rn": list(RB_NAMEN[:RUMBLE_N]),
+            "rc": rumble_cfg,
+            "rt": list(TELE_NAMEN[:RUMBLE_N]),
+            "rd": rumble_da,
         })
 
     elif pfad == "/data":
@@ -889,6 +1365,41 @@ def handle(conn):
             print("Kurve fehlerhaft:", e)
             http_json(conn, {"ok": False})
 
+    elif pfad == "/rumble_set":
+        try:
+            d = json.loads(body)
+            for i in range(RUMBLE_N):
+                if i < len(d) and isinstance(d[i], dict):
+                    for feld in ("schwelle", "min", "max", "kick",
+                                 "gain", "brems"):
+                        if feld in d[i]:
+                            v = int(d[i][feld])
+                            grenze = 1000 if feld == "brems" else 200
+                            rumble_cfg[i][feld] = (0 if v < 0
+                                                   else (grenze if v > grenze else v))
+                    if "an" in d[i]:
+                        rumble_cfg[i]["an"] = bool(d[i]["an"])
+            ok = rumble_speichern()
+        except Exception as e:
+            print("Rumble-Einstellungen fehlerhaft:", e)
+            ok = False
+        http_json(conn, {"ok": ok, "rc": rumble_cfg})
+
+    elif pfad.startswith("/rumble_test"):
+        k = query_param(pfad, "k")
+        v = query_param(pfad, "v")
+        q = query_param(pfad, "s")
+        try:
+            rumble_test_setz(int(k), float(v),
+                             int(q) if q is not None else None)
+        except (TypeError, ValueError):
+            pass
+        http_json(conn, {"ok": True})
+
+    elif pfad.startswith("/rumble_stop"):
+        rumble_not_aus()
+        http_json(conn, {"ok": True})
+
     elif pfad == "/wlan_aus":
         http_json(conn, {"ok": True})
         wlan_stoppen_flag = True
@@ -923,12 +1434,19 @@ while True:
     now = time.monotonic()
     wifi_btn.update()
 
+    # Beides muss in jeder Runde laufen und blockiert nie.
+    tele_lesen()
+    rumble_step()
+
     if BREMSE_TYP == "hx711" and now - hx_rate_t >= 1.0:
         hx_rate   = hx_count       # tatsaechlich erreichte Wandlungen pro Sekunde
         hx_count  = 0
         hx_rate_t = now
 
     if wifi_btn.fell:
+        # Der Taster ist immer zuerst Not-Aus. Das ist der einzige Weg, der
+        # ohne Browser, ohne WLAN und ohne PC funktioniert.
+        rumble_not_aus()
         if not wlan_aktiv:
             print("Starte AP ...")
             wifi.radio.start_ap(
@@ -979,6 +1497,7 @@ while True:
             gc.collect()
 
         if wlan_stoppen_flag:
+            rumble_not_aus()        # ohne Oberflaeche kein Handbetrieb mehr
             cal_speichern(cal)
             try:
                 sock.close()
@@ -1003,8 +1522,11 @@ while True:
         # Ausserdem gelangen so keine Zufallswerte ins Spiel.
         sweep_update()
     elif not wlan_aktiv or HID_IM_WLAN:
-        gamepad_senden(achse_wert(achse_raw(0), cal[0]),
-                       achse_wert(achse_raw(1), cal[1]),
-                       achse_wert(achse_raw(2), cal[2]))
+        # achse_lesen mittelt ueber HID_MITTEL Messungen und ist dabei
+        # wraparound-fest. Die Waegezelle wird darin automatisch uebersprungen,
+        # die ist von sich aus langsam genug.
+        gamepad_senden(achse_wert(achse_lesen(0, HID_MITTEL), cal[0]),
+                       achse_wert(achse_lesen(1, HID_MITTEL), cal[1]),
+                       achse_wert(achse_lesen(2, HID_MITTEL), cal[2]))
         if not wlan_aktiv:
             time.sleep(0.001)

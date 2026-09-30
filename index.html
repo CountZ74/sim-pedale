@@ -38,11 +38,24 @@ canvas{display:block;width:100%;touch-action:none;cursor:crosshair;border-radius
 .cbi{background:#7eb8f7;height:100%;border-radius:4px;transition:width .12s;position:absolute;top:0;left:0;opacity:.55}
 .cbo{background:linear-gradient(90deg,#e94560,#f5a623);height:100%;border-radius:4px;transition:width .12s}
 .off{opacity:.5}
+.rg{display:grid;grid-template-columns:repeat(auto-fit,minmax(58px,1fr));gap:6px;margin-top:8px}
+.rg label{font-size:.68rem;color:#8ab;display:block}
+.rg input{width:100%;background:#0d1b2e;border:1px solid #0f3460;border-radius:5px;
+  color:#eee;padding:5px;font-size:.8rem;font-family:inherit;text-align:center}
+.rs{width:100%;margin-top:10px;accent-color:#e94560}
+.dg{background:#0d1b2e;border:1px solid #0f3460;border-radius:7px;padding:10px;
+  font-size:.75rem;color:#8ab;margin-bottom:10px;line-height:1.6}
+.dg code{color:#7eb8f7;font-size:.72rem;word-break:break-all}
+.dg .nl{color:#4caf50;font-weight:700}
+.hint{font-size:.72rem;color:#889;margin-top:6px;line-height:1.5}
+.stop{width:100%;background:#8b1a1a;color:#fff;border:1px solid #e94560;border-radius:7px;padding:11px;margin-bottom:10px;font-size:.95rem;font-weight:600;cursor:pointer;font-family:inherit}
+.stop:active{background:#e94560}
 </style></head><body>
 <h1>Pico Pedale <span style="font-size:.7rem;color:#556">v9</span></h1>
 <div class="tabs">
   <div class="tab on" id="tk" onclick="tab('k')">Kalibrierung</div>
   <div class="tab" id="tc" onclick="tab('c')">Kurven</div>
+  <div class="tab" id="tv" onclick="tab('v')">Rumble</div>
 </div>
 
 <div id="pk" class="panel on">
@@ -71,16 +84,43 @@ canvas{display:block;width:100%;touch-action:none;cursor:crosshair;border-radius
   </div>
 </div>
 
+<div id="pv" class="panel">
+  <button class="stop" onclick="rallesaus()">■ Alle Motoren sofort aus</button>
+  <div class="dg" id="tdg">Telemetrie: &hellip;</div>
+  <div id="rax"></div>
+  <button class="sb" onclick="rsave()">Einstellungen speichern</button>
+  <div class="hint">
+    <b>Schwelle</b> ist die Effektst&auml;rke, unter der gar nichts ausgegeben
+    wird &ndash; ohne sie brummt der Motor bei jedem Hintergrundrauschen mit.
+    Faustregel: etwa die H&auml;lfte von <b>min</b>.
+    <b>min</b> ist das Duty, ab dem der Motor im Lauf nicht stehenbleibt &ndash;
+    darunter passiert nichts Sinnvolles, deshalb f&auml;ngt der Effekt dort an.
+    <b>max</b> ist die volle St&auml;rke. <b>Kick</b>: liegt der Sollwert beim
+    Anfahren darunter, gibt es einen kurzen Anlaufimpuls.
+    <b>Gain</b> skaliert, was SimHub schickt.
+    <b>Brems&nbsp;ms</b> ist ein Charakterregler: <b>0</b> stoppt jeden Impuls
+    sofort, die Schl&auml;ge sind klar getrennt (ABS, Randstein, Schaltruck).
+    Ein h&ouml;herer Wert l&auml;sst kurze L&uuml;cken auslaufen, die Impulse
+    verschmelzen zu durchgehender Vibration (Fahrbahn, Radschlupf).
+    <br><br>Der Testschieber h&auml;lt den Motor nur, solange die Seite offen
+    ist und sendet: bleibt das Lebenszeichen l&auml;nger als 1,2&nbsp;s aus,
+    schaltet der Pico von selbst ab. Der <b>Taster am Pico</b> ist immer
+    Not-Aus, auch ohne Browser.
+  </div>
+</div>
+
 <script>
 const $=i=>document.getElementById(i);
 const ADC=65536;
 let N=null,C=null,T=null,S=null,ai=0,di=-1,tabAkt='k',pending=false;
+let RN=[],RC=[],RT=[],RD=false;
 
 function tab(id){
-  for(const p of ['k','c']){
+  for(const p of ['k','c','v']){
     $('p'+p).classList.toggle('on',p===id);
     $('t'+p).classList.toggle('on',p===id);
   }
+  if(tabAkt==='v'&&id!=='v')rallesaus();
   tabAkt=id;
   if(id==='c')draw();
 }
@@ -92,8 +132,8 @@ async function api(u,o){
 async function init(){
   const d=await api('/init');
   if(!d){setTimeout(init,800);return;}
-  N=d.n;C=d.cv;T=d.t;
-  bauAchsen();bauKTabs();draw();
+  N=d.n;C=d.cv;T=d.t;RN=d.rn||[];RC=d.rc||[];RT=d.rt||[];RD=d.rd;
+  bauAchsen();bauKTabs();bauRumble();draw();
   poll();
 }
 
@@ -139,6 +179,7 @@ function render(){
   $('fsw').innerHTML = S.fs ? '' :
     '<div class="se">Dateisystem schreibgeschützt – Kalibrierung gilt nur bis zum Neustart.</div>';
   renderStatus();
+  if(tabAkt==='v')renderRumble();
   if(tabAkt==='c'){
     const inp=S.i[ai],out=S.o[ai];
     $('bi').style.width=inp+'%';$('bo').style.width=out+'%';
@@ -190,13 +231,149 @@ async function poll(){
     const d=await api('/data');
     if(d){S=d;render();}
   }
-  setTimeout(poll, (S&&S.st==='sweep')?200:500);
+  setTimeout(poll, (S&&S.st==='sweep')?200:(tabAkt==='v'?400:500));
 }
 
 async function wlanAus(){
   await api('/wlan_aus');
   document.body.innerHTML='<h1>HID-Modus aktiv</h1><p style="color:#8ab;margin-top:10px">'+
     'Der Access Point ist aus. Zum Wiedereinschalten den Taster am Pico drücken.</p>';
+}
+
+/* ---- Rumble ---- */
+
+function bauRumble(){
+  if(!RD){
+    $('rax').innerHTML='<div class="se">Keine Rumble-Ausgänge verfügbar – '+
+      'die Pins aus RUMBLE_PINS lassen sich nicht belegen. Siehe Konsole.</div>';
+    return;
+  }
+  $('rax').innerHTML=RN.map((n,i)=>{
+    const c=RC[i]||{schwelle:4,min:8,max:100,kick:12,gain:100,brems:0,an:true};
+    return '<div class="a" id="ra'+i+'">'+
+      '<div class="hd"><b>'+n+'</b><span id="rp'+i+'">0%</span></div>'+
+      '<div class="bb"><div class="b" id="rbar'+i+'"></div></div>'+
+      '<div class="meta">SimHub-Name: <code>'+(RT[i]||'?')+'</code>'+
+        ' &nbsp;·&nbsp; <span id="rv'+i+'">–</span></div>'+
+      '<div class="rg">'+
+        fld(i,'schwelle','Schwelle %',c.schwelle)+
+        fld(i,'min','min %',c.min)+fld(i,'max','max %',c.max)+
+        fld(i,'kick','Kick %',c.kick)+fld(i,'gain','Gain %',c.gain)+
+        fld(i,'brems','Brems ms',c.brems)+
+      '</div>'+
+      '<input class="rs" type="range" min="0" max="100" value="0" '+
+        'id="rt'+i+'" oninput="rtest('+i+')">'+
+      '<div class="br">'+
+        '<button class="btn s" onclick="rpuls('+i+')">Kurzer Stoß</button>'+
+        '<button class="btn r" onclick="rstop('+i+')">Test aus</button>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+}
+
+function fld(i,k,lbl,v){
+  return '<div><label>'+lbl+'</label>'+
+    '<input type="number" min="0" max="200" id="r_'+k+i+'" value="'+v+'"></div>';
+}
+
+function rzahl(id,def){
+  const e=$(id); if(!e)return def;
+  const v=parseInt(e.value,10);
+  return isNaN(v)?def:v;
+}
+
+async function rsave(){
+  const body=RN.map((n,i)=>({
+    schwelle:rzahl('r_schwelle'+i,4),
+    min:rzahl('r_min'+i,8), max:rzahl('r_max'+i,100),
+    kick:rzahl('r_kick'+i,12), gain:rzahl('r_gain'+i,100),
+    brems:rzahl('r_brems'+i,0), an:true}));
+  const d=await api('/rumble_set',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(d&&d.rc)RC=d.rc;
+  const b=event&&event.target;
+  if(b){b.textContent=(d&&d.ok)?'Gespeichert':'Nicht speicherbar';
+        setTimeout(()=>b.textContent='Einstellungen speichern',1400);}
+}
+
+/* Testbetrieb.
+   Ein Schieberegler feuert bei JEDER Pixelbewegung ein oninput. Ungedrosselt
+   sind das Dutzende Anfragen pro Sekunde; der Pico arbeitet sie einzeln ab,
+   sie stauen sich, und Sekunden später läuft der Motor mit einem Wert los,
+   den der Regler längst nicht mehr zeigt. Deshalb wird der aktuelle Wert nur
+   gemerkt und von einem Takt regelmäßig geschickt - der ist gleichzeitig das
+   Lebenszeichen für die Totmannschaltung im Pico. */
+let seqN=Date.now(), rtWert={}, rtLoop=null;
+
+function rtPumpe(){
+  const ks=Object.keys(rtWert);
+  if(!ks.length){ if(rtLoop){clearInterval(rtLoop);rtLoop=null;} return; }
+  for(const k of ks) api('/rumble_test?k='+k+'&v='+rtWert[k]+'&s='+(++seqN));
+}
+
+function rtest(i){
+  const v=parseInt($('rt'+i).value,10);
+  if(!v||v<=0){ rstop(i); return; }
+  const neu=!(i in rtWert);
+  rtWert[i]=v;
+  if(neu)rtPumpe();
+  if(!rtLoop)rtLoop=setInterval(rtPumpe,250);
+}
+
+function rstop(i){
+  const e=$('rt'+i); if(e)e.value=0;
+  delete rtWert[i];
+  api('/rumble_test?k='+i+'&v=-1&s='+(++seqN));
+}
+
+async function rpuls(i){
+  await api('/rumble_test?k='+i+'&v=100&s='+(++seqN));
+  setTimeout(()=>api('/rumble_test?k='+i+'&v=-1&s='+(++seqN)),140);
+}
+
+async function rallesaus(){
+  rtWert={};
+  if(rtLoop){clearInterval(rtLoop);rtLoop=null;}
+  RN.forEach((n,i)=>{const e=$('rt'+i); if(e)e.value=0;});
+  await api('/rumble_stop?s='+(++seqN));
+}
+
+/* Tab verlassen oder Seite schließen beendet jeden Test. */
+window.addEventListener('beforeunload',()=>{
+  navigator.sendBeacon&&navigator.sendBeacon('/rumble_stop?s='+(++seqN));
+});
+
+function sicht(t){
+  return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/\r/g,'<span class="nl">\\r</span>')
+    .replace(/\n/g,'<span class="nl">\\n</span>');
+}
+
+function renderRumble(){
+  if(!S)return;
+  const z=S.tz;
+  let txt;
+  if(z===0){
+    txt='<b>Nichts empfangen.</b> SimHub sendet nicht – falscher COM-Port '+
+        'oder der Verbindungsschalter im Gerät ist aus.';
+  }else if(z===1){
+    txt='<b>'+S.tb+' Zeichen, aber keine vollständige Zeile.</b> '+
+        'Meist fehlt das <code>\\n</code> am Ende der Formel.';
+  }else{
+    txt='<b>Verbunden</b> · '+S.tl+' Zeilen · '+S.tb+' Zeichen';
+  }
+  const werte=S.tv&&Object.keys(S.tv).length
+    ? '<br>Werte: '+Object.keys(S.tv).map(k=>k+'='+S.tv[k]).join(' · ') : '';
+  $('tdg').innerHTML='Telemetrie: '+txt+werte+
+    (S.tr?'<br>Zuletzt: <code>'+sicht(S.tr)+'</code>':'');
+  if(!RD||!S.rb)return;
+  for(let i=0;i<S.rb.length;i++){
+    const b=$('rbar'+i); if(!b)continue;
+    b.style.width=S.rb[i]+'%';
+    $('rp'+i).textContent=S.rb[i]+'%';
+    const n=RT[i], v=(S.tv&&n in S.tv)?S.tv[n]:null;
+    $('rv'+i).textContent=(v===null)?'keine Daten':('SimHub: '+v);
+  }
 }
 
 /* ---- Kennlinien-Editor ---- */
