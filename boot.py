@@ -1,4 +1,4 @@
-# boot.py - Pico W Pedale v9.7
+# boot.py - Pico W Pedale v9.8
 #
 # Jeder Schritt ist einzeln abgesichert. Faellt einer aus, laufen die anderen
 # trotzdem - und der Grund steht hinterher in boot_out.txt auf CIRCUITPY.
@@ -44,9 +44,15 @@ try:
 except Exception as e:
     meldungen.append("USB-Name nicht gesetzt: %s" % e)
 
-# --- HID-Gamepad -------------------------------------------------------------
+# --- HID-Joystick ------------------------------------------------------------
 #
-# 16 Buttons und 3 Achsen X, Y, Z mit je 16 bit, unsigned 0..65535.
+# 16 Buttons und 3 Achsen Rx, Ry, Rz mit je 16 bit, unsigned 0..65535.
+#
+# Seit v9.8 als Joystick mit Rx/Ry/Rz statt als Gamepad mit X/Y/Z: Automobilista
+# 2 und Project CARS steuern ihr Menue ueber X/Y von Gamepads. Ein losgelassenes
+# Pedal steht auf 0, bei einer Achse mit Mitte 32768 ist das voller Anschlag -
+# das Menue scrollte dadurch von selbst. code.py sucht das Geraet ueber die
+# Usage (0x04) - beide Dateien muessen deshalb zusammen aktualisiert werden.
 #
 # Bis v9.5 waren die Achsen 8 bit signed (-127..127), also 255 Stufen. Der
 # AS5600 haengt am 12-bit-ADC und liefert ueber einen typischen Pedalweg rund
@@ -56,12 +62,12 @@ except Exception as e:
 #
 # Report-Aufbau (8 Byte Nutzdaten, die Report-ID kommt vom Stack davor):
 #   Byte 0-1   Buttons 1-16, little endian
-#   Byte 2-3   X  (Gas)
-#   Byte 4-5   Y  (Bremse)
-#   Byte 6-7   Z  (Kupplung)
+#   Byte 2-3   Rx (Gas)
+#   Byte 4-5   Ry (Bremse)
+#   Byte 6-7   Rz (Kupplung)
 GAMEPAD_DESCRIPTOR = bytes((
     0x05, 0x01,        # Usage Page (Generic Desktop)
-    0x09, 0x05,        # Usage (Gamepad)
+    0x09, 0x04,        # Usage (Joystick)
     0xA1, 0x01,        # Collection (Application)
     0x85, 0x04,        #   Report ID (4)
 
@@ -75,11 +81,11 @@ GAMEPAD_DESCRIPTOR = bytes((
     0x95, 0x10,        #   Report Count (16)
     0x81, 0x02,        #   Input (Data, Variable, Absolute)
 
-    # Achsen X, Y, Z (je 16 bit, 0..65535)
+    # Achsen Rx, Ry, Rz (je 16 bit, 0..65535)
     0x05, 0x01,                    #   Usage Page (Generic Desktop)
-    0x09, 0x30,                    #   Usage (X)
-    0x09, 0x31,                    #   Usage (Y)
-    0x09, 0x32,                    #   Usage (Z)
+    0x09, 0x33,                    #   Usage (Rx)  Gas
+    0x09, 0x34,                    #   Usage (Ry)  Bremse
+    0x09, 0x35,                    #   Usage (Rz)  Kupplung
     0x15, 0x00,                    #   Logical Minimum (0)
     0x27, 0xFF, 0xFF, 0x00, 0x00,  #   Logical Maximum (65535)
     0x75, 0x10,                    #   Report Size (16)
@@ -93,7 +99,7 @@ GAMEPAD_DESCRIPTOR = bytes((
 gamepad = usb_hid.Device(
     report_descriptor=GAMEPAD_DESCRIPTOR,
     usage_page=0x01,         # Generic Desktop
-    usage=0x05,              # Gamepad
+    usage=0x04,              # Joystick (muss zu code.py passen)
     report_ids=(4,),
     in_report_lengths=(8,),  # 2 Byte Buttons + 6 Byte Achsen
     out_report_lengths=(0,),
@@ -146,4 +152,4 @@ if meldungen:
     for m in meldungen:
         print("  -", m)
 else:
-    print("boot.py ok - Gamepad aktiv (16 bit), Laufwerk aus, Datenkanal an")
+    print("boot.py ok - Joystick aktiv (16 bit), Laufwerk aus, Datenkanal an")

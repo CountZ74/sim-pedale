@@ -1,6 +1,13 @@
 """
-Pico W Pedale Controller v9.7 - Wraparound-Kalibrierung + schneller Webserver
+Pico W Pedale Controller v9.8 - Wraparound-Kalibrierung + schneller Webserver
 =============================================================================
+v9.8: Der Pico meldet sich als Joystick mit Rx/Ry/Rz statt als Gamepad mit
+      X/Y/Z (Aenderung in boot.py, hier die Suche nach dem HID-Geraet). Grund:
+      Automobilista 2 und Project CARS lassen Gamepads das Menue steuern, ein
+      losgelassenes Pedal (Wert 0) wurde als dauernd gedrueckte Richtung
+      gelesen. Achszuordnung im Spiel muss danach neu vorgenommen werden.
+      boot.py und code.py muessen zusammen aktualisiert werden.
+
 v9.7: Rumble. Zwei Vibrationsmotoren an je einem DRV8871, angesteuert im
       slow-decay-Verfahren (IN1 fest an, invertierte PWM auf IN2). Am realen
       Aufbau gemessen sinkt die Abfallschwelle dadurch von 60 auf 6 Prozent -
@@ -416,7 +423,7 @@ def led_blink(n, an=100, aus=100):
 
 gamepad_device = None
 for device in usb_hid.devices:
-    if device.usage == 0x05 and device.usage_page == 0x01:
+    if device.usage == 0x04 and device.usage_page == 0x01:   # Joystick, siehe boot.py
         gamepad_device = device
         break
 
@@ -1424,7 +1431,7 @@ except OSError:
     print("Achtung: Dateisystem schreibgeschuetzt, Kalibrierung nur im RAM")
 
 led_blink(3, an=150, aus=150)
-print("Pico W Pedale v9.5 bereit - Bremse:", BREMSE_TYP, hx_modus,
+print("Pico W Pedale v9.8 bereit - Bremse:", BREMSE_TYP, hx_modus,
       "- HID:", "ja" if gamepad_device else "NEIN")
 time.sleep(1.0)
 
