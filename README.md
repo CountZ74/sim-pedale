@@ -1,4 +1,8 @@
 # Pico W Pedale Controller v3
+
+> **Neu:** Unter [`firmware/`](firmware/README.md) liegt die universelle Firmware fuer
+> Pedale, Buttonbox und Lenkrad (konfigurierbar im Browser, nach dem Vorbild von FreeJoy).
+> Die Dateien hier im Hauptordner sind die bisherige Pedal-Firmware.
 FreeJoy-Ersatz mit WLAN-Konfigurator im Browser
 
 ## Hardware
